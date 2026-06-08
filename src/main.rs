@@ -305,7 +305,7 @@ impl App {
         let date = self.issues.get(self.sel).map(|i| i.date.as_str()).unwrap_or("\u{2014}");
         let pages = self.last_page() + 1;
         let title = format!(" gazette   {}   (day {} \u{00b7} p{}/{})", date, day, self.page + 1, pages);
-        let hint = "ENTER+N open \u{00b7} PgUp/Dn page \u{00b7} g/G \u{00b7} n/p day \u{00b7} q quit ";
+        let hint = "ENTER+N open \u{00b7} c discuss \u{00b7} PgUp/Dn \u{00b7} n/p day \u{00b7} q quit ";
         let pad = (self.cols as usize)
             .saturating_sub(crust::display_width(&title) + crust::display_width(hint));
         self.top.say(&format!("{}{}{}",
@@ -393,11 +393,52 @@ impl App {
         self.open_in_scroll(&url);
     }
 
+    /// `c` — open an interactive Claude session seeded with the whole current
+    /// issue (full text + every source URL), to discuss the news and go deeper.
+    /// Suspends gazette while claude runs, then restores it (same alt-screen
+    /// dance as open_in_scroll). Cold when idle — fires only on the keypress.
+    fn discuss_news(&mut self) {
+        let Some(issue) = self.issues.get(self.sel) else {
+            self.render_foot(" No issue to discuss.");
+            return;
+        };
+        let date = issue.date.clone();
+        let body = std::fs::read_to_string(&issue.path).unwrap_or_default();
+        if body.trim().is_empty() {
+            self.render_foot(" This issue is empty \u{2014} nothing to discuss.");
+            return;
+        }
+        let prompt = format!(
+            "Let's discuss my news digest for {date}. Here is the full issue, \
+             including every source URL:\n\n{body}\n\nGive me a brief overview \
+             of the most notable items, then let's talk \u{2014} I'll ask about \
+             specific stories and you can go deeper, pull up the linked sources, \
+             and add context."
+        );
+        Crust::cleanup();
+        let status = std::process::Command::new("claude").arg(&prompt).status();
+        Crust::init();
+        Crust::set_app_identity("gazette");
+        self.top.invalidate();
+        self.foot.invalidate();
+        self.render_all();
+        if status.is_err() {
+            self.render_foot(" Could not launch 'claude' (is it on PATH?).");
+        }
+    }
+
     fn open_in_scroll(&mut self, url: &str) {
         Crust::cleanup();
         let status = std::process::Command::new("scroll").arg(url).status();
         Crust::init();
         Crust::set_app_identity("gazette");
+        // Leaving + re-entering the alt screen around scroll wipes the screen,
+        // but the diff-cached say() panes (top, foot) still hold pre-scroll
+        // content and would skip repainting identical text — leaving row 1 /
+        // the foot blank. Invalidate them so render_all repaints. (left/right
+        // use full_refresh, which self-clears its diff cache.)
+        self.top.invalidate();
+        self.foot.invalidate();
         self.render_all();
         if status.is_err() {
             self.render_foot(" Could not launch 'scroll' (is it on PATH?).");
@@ -419,6 +460,7 @@ impl App {
                 "n" | "]" | "RIGHT" => { let s = self.sel + 1; self.select(s); }
                 "p" | "[" | "LEFT" => { let s = self.sel.saturating_sub(1); self.select(s); }
                 "ENTER" => self.follow_link(),
+                "c" => self.discuss_news(),
                 "r" => {
                     self.issues = load_issues();
                     if self.sel >= self.issues.len() { self.sel = self.issues.len().saturating_sub(1); }
@@ -438,7 +480,8 @@ fn main() {
         println!("gazette \u{2014} reader for your daily news digest (~/.news/news-*.md)");
         println!("  PgDn/PgUp (or j/k, arrows, SPACE/b)   turn a two-column page");
         println!("  g/Home  G/End   first / last page     n/p or [ ]    prev/next day");
-        println!("  ENTER then N    open link [N] in scroll    r reload   q quit");
+        println!("  ENTER then N    open link [N] in scroll");
+        println!("  c    discuss the issue with Claude (full text + links)    r reload   q quit");
         return;
     }
     Crust::init();
