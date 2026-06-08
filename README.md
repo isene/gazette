@@ -23,17 +23,7 @@ headless Claude run (see *Pipeline* below) and synced to the machine as one
 Markdown file per day. gazette lists the available days in a left pane and
 renders the selected issue in the right pane.
 
-```
- gazette   2026-06-07   (1/7)              ENTER+N open · j/k scroll · n/p day · q quit
-┌────────────┬──────────────────────────────────────────────────────────────────────┐
-│ 2026-06-07 │ # News - 2026-06-07                                                    │
-│ 2026-06-06 │                                                                        │
-│ 2026-06-05 │ ## AI & LLMs                                                           │
-│ 2026-06-04 │ ### Anthropic ships Claude Opus 4.8                                    │
-│ …          │ Anthropic released Claude Opus 4.8 …                                   │
-│            │ [1] https://www.techzine.eu/…                                          │
-└────────────┴──────────────────────────────────────────────────────────────────────┘
-```
+![gazette](img/screenshot.png)
 
 ## Keys
 
