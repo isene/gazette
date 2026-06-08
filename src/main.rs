@@ -3,10 +3,18 @@
 // The digest is generated server-side (a headless Claude run on an always-on
 // host) and synced here via Syncthing into ~/.news as `news-YYYY-MM-DD.md`,
 // one issue per day, 7-day rolling. gazette is a thin reader: a left pane lists
-// the available days, the right pane renders the selected issue's Markdown.
+// the available days, the right pane renders the selected issue's Markdown as a
+// two-column newspaper spread.
 //
-// Links follow scroll's convention: each source URL is numbered `[N]` inline;
-// press ENTER, type the number, ENTER — gazette opens it in `scroll`.
+// Layout: each `## section` is kept together — a section that starts in a
+// column runs all the way down that column and is never split across the
+// column break (the right column may end up shorter, which is fine). The
+// content is paginated into two-column spreads; PgDn / PgUp turn a page.
+//
+// Links follow scroll's convention: each source URL is numbered `[N]` and shown
+// as `[N] hostname` (not the full URL); press ENTER, type the number, ENTER —
+// gazette opens it in `scroll`. The label is also an OSC 8 hyperlink, so it is
+// directly clickable in glass.
 //
 // Design goals (Fe2O3): cold when idle (blocking key read, no timers/polling),
 // fast startup, minimal work per keystroke.
@@ -15,14 +23,15 @@ use crust::{Crust, Pane, Input, style};
 use std::path::PathBuf;
 
 const LIST_W: u16 = 14; // left day-list width ("2026-06-07" + marker)
+const GUTTER: usize = 3; // space between the two reading columns
 
 // Palette (xterm-256), aligned with the rest of the suite.
-const C_TITLE: u8 = 81; // issue title  (#)
 const C_SECTION: u8 = 220; // section     (##)
 const C_HEAD: u8 = 255; // item headline (###)
 const C_BODY: u8 = 252; // body text
-const C_URL: u8 = 240; // url text (dim)
+const C_URL: u8 = 245; // url host (dim)
 const C_LINKNUM: u8 = 75; // [N] markers (matches scroll's link colour)
+const C_SEP: u8 = 238; // section rule
 const C_SEL: u8 = 81; // selected day
 
 struct Issue {
@@ -39,7 +48,11 @@ struct App {
     foot: Pane,
     issues: Vec<Issue>,
     sel: usize,
-    links: Vec<String>, // URLs in the current issue; [N] == links[N-1]
+    links: Vec<String>, // full URLs in the current issue; [N] == links[N-1]
+    columns: Vec<Vec<String>>, // section-kept columns, each col_h lines tall
+    page: usize,        // current two-column spread (shows columns 2p, 2p+1)
+    col_w: usize,       // one column's text width
+    col_h: usize,       // one column's height in rows
 }
 
 fn news_dir() -> PathBuf {
@@ -63,88 +76,236 @@ fn load_issues() -> Vec<Issue> {
     v
 }
 
-/// Render a Markdown issue to styled terminal text and collect its source URLs.
-/// Each bare URL line becomes a numbered `[N]` link (also emitted as an OSC 8
-/// hyperlink so it stays clickable in glass/kitty). Returns (text, urls).
-fn render_md(src: &str) -> (String, Vec<String>) {
-    let mut out = String::new();
-    let mut urls = Vec::new();
-    for raw in src.lines() {
-        let line = raw.trim_end();
-        if let Some(t) = line.strip_prefix("# ") {
-            out.push_str(&style::bold(&style::fg(t, C_TITLE)));
-        } else if let Some(t) = line.strip_prefix("## ") {
-            out.push('\n');
-            out.push_str(&style::bold(&style::fg(t, C_SECTION)));
-        } else if let Some(t) = line.strip_prefix("### ") {
-            out.push_str(&style::bold(&style::fg(t, C_HEAD)));
-        } else if line.starts_with("http://") || line.starts_with("https://") {
-            urls.push(line.to_string());
-            let n = urls.len();
-            let marker = style::fg(&format!("[{}]", n), C_LINKNUM);
-            // OSC 8 so the URL is also directly clickable; crust tracks the
-            // open hyperlink across wrap/truncate.
-            let link = format!("\x1b]8;;{}\x1b\\{}\x1b]8;;\x1b\\", line, line);
-            out.push_str(&format!("{} {}", marker, style::fg(&link, C_URL)));
-        } else {
-            out.push_str(&style::fg(line, C_BODY));
-        }
-        out.push('\n');
+/// Greedy word-wrap of plain text to `width`, hard-splitting any word longer
+/// than the column. Returns at least one (possibly empty) line.
+fn wrap_plain(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![text.to_string()];
     }
-    (out, urls)
+    let mut out = Vec::new();
+    let mut line = String::new();
+    let mut line_w = 0usize;
+    for word in text.split_whitespace() {
+        let w = crust::display_width(word);
+        if w > width {
+            if !line.is_empty() {
+                out.push(std::mem::take(&mut line));
+                line_w = 0;
+            }
+            let mut chunk = String::new();
+            let mut cw = 0;
+            for ch in word.chars() {
+                let cwid = crust::display_width(&ch.to_string());
+                if cw + cwid > width {
+                    out.push(std::mem::take(&mut chunk));
+                    cw = 0;
+                }
+                chunk.push(ch);
+                cw += cwid;
+            }
+            line = chunk;
+            line_w = cw;
+            continue;
+        }
+        if line_w == 0 {
+            line.push_str(word);
+            line_w = w;
+        } else if line_w + 1 + w <= width {
+            line.push(' ');
+            line.push_str(word);
+            line_w += 1 + w;
+        } else {
+            out.push(std::mem::take(&mut line));
+            line.push_str(word);
+            line_w = w;
+        }
+    }
+    out.push(line);
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
+}
+
+/// `https://www.techzine.eu/news/...` → `techzine.eu` (scheme + leading www.
+/// stripped, path dropped). Keeps link rows short and scannable.
+fn hostname(url: &str) -> String {
+    let after = url.split("://").nth(1).unwrap_or(url);
+    let host = after.split('/').next().unwrap_or(after);
+    host.strip_prefix("www.").unwrap_or(host).to_string()
+}
+
+/// Close the current section: drop trailing blank lines and, if any content
+/// remains, move it into `sections`.
+fn flush_section(cur: &mut Vec<String>, sections: &mut Vec<Vec<String>>) {
+    while matches!(cur.last(), Some(s) if s.is_empty()) { cur.pop(); }
+    if !cur.is_empty() { sections.push(std::mem::take(cur)); }
+}
+
+/// Split an issue's Markdown into SECTIONS of styled, column-width-wrapped
+/// lines. A new section starts at each `##`; its `###` items (with bodies and
+/// source links, one blank line between items) all belong to that section. The
+/// section is the keep-together unit — laid whole into a single column.
+fn issue_sections(md: &str, col_w: usize, links: &mut Vec<String>) -> Vec<Vec<String>> {
+    links.clear();
+    let mut sections: Vec<Vec<String>> = Vec::new();
+    let mut cur: Vec<String> = Vec::new();
+    let mut first_item = true; // is the next `###` the first item of this section?
+    for raw in md.lines() {
+        let line = raw.trim_end();
+        if line.starts_with("# ") {
+            continue; // title is shown in the top bar
+        } else if let Some(t) = line.strip_prefix("## ") {
+            flush_section(&mut cur, &mut sections);
+            for sub in wrap_plain(t, col_w) { cur.push(style::bold(&style::fg(&sub, C_SECTION))); }
+            cur.push(style::fg(&"\u{2500}".repeat(col_w), C_SEP));
+            first_item = true;
+        } else if let Some(t) = line.strip_prefix("### ") {
+            if !first_item { cur.push(String::new()); } // blank between items
+            for sub in wrap_plain(t, col_w) { cur.push(style::bold(&style::fg(&sub, C_HEAD))); }
+            first_item = false;
+        } else if line.starts_with("http://") || line.starts_with("https://") {
+            links.push(line.to_string());
+            let n = links.len();
+            let host = hostname(line);
+            // OSC 8 around the label so a glass click opens the full URL too.
+            let labelled = format!("\x1b]8;;{}\x1b\\{}\x1b]8;;\x1b\\", line, style::fg(&host, C_URL));
+            cur.push(format!("{} {}", style::fg(&format!("[{}]", n), C_LINKNUM), labelled));
+        } else if line.is_empty() {
+            // ignored — item spacing is added at the `###` boundary
+        } else {
+            for sub in wrap_plain(line, col_w) { cur.push(style::fg(&sub, C_BODY)); }
+        }
+    }
+    flush_section(&mut cur, &mut sections);
+    sections
+}
+
+/// Pad `cur` to exactly `h` lines and push it as a finished column.
+fn push_column(cur: &mut Vec<String>, cols: &mut Vec<Vec<String>>, h: usize) {
+    while cur.len() < h { cur.push(String::new()); }
+    cols.push(std::mem::take(cur));
+}
+
+/// Lay sections into fixed-height columns, keeping each section together: a
+/// section that does not fit in the current column's remaining space starts a
+/// fresh column (leaving the previous column short), so it is never split
+/// across the column break. A section taller than a whole column (rare on a
+/// normal terminal) is the only thing allowed to flow across columns.
+fn layout_columns(sections: Vec<Vec<String>>, h: usize) -> Vec<Vec<String>> {
+    let h = h.max(1);
+    let mut cols: Vec<Vec<String>> = Vec::new();
+    let mut cur: Vec<String> = Vec::new();
+    for s in sections {
+        let sep = if cur.is_empty() { 0 } else { 1 }; // blank line between sections
+        if cur.len() + sep + s.len() <= h {
+            if sep == 1 { cur.push(String::new()); }
+            cur.extend(s);
+        } else if s.len() <= h {
+            push_column(&mut cur, &mut cols, h);
+            cur.extend(s);
+        } else {
+            if !cur.is_empty() { push_column(&mut cur, &mut cols, h); }
+            for line in s {
+                if cur.len() == h { cols.push(std::mem::take(&mut cur)); }
+                cur.push(line);
+            }
+        }
+    }
+    if !cur.is_empty() { push_column(&mut cur, &mut cols, h); }
+    cols
 }
 
 impl App {
     fn new() -> Self {
         let (cols, rows) = Crust::terminal_size();
-        let mut top = Pane::new(1, 1, cols, 1, C_TITLE as u16, 236);
+        let mut top = Pane::new(1, 1, cols, 1, 81, 236);
         top.wrap = false;
         top.scroll = false;
         let mut left = Pane::new(1, 2, LIST_W, rows.saturating_sub(2), C_BODY as u16, 0);
         left.wrap = false;
         let mut right = Pane::new(LIST_W + 2, 2, cols.saturating_sub(LIST_W + 1), rows.saturating_sub(2), C_BODY as u16, 0);
-        right.wrap = true;
+        right.wrap = false;
+        right.scroll = false;
         let mut foot = Pane::new(1, rows, cols, 1, 245, 236);
         foot.wrap = false;
         foot.scroll = false;
 
         let issues = load_issues();
-        let mut app = App { cols, rows, top, left, right, foot, issues, sel: 0, links: Vec::new() };
+        let mut app = App {
+            cols, rows, top, left, right, foot, issues, sel: 0,
+            links: Vec::new(), columns: Vec::new(), page: 0, col_w: 0, col_h: 0,
+        };
         app.load_selected();
         app
     }
 
-    /// Load the selected day's issue into the right pane.
+    /// Read the selected issue, wrap + paginate into section-kept columns,
+    /// reset to the first page.
     fn load_selected(&mut self) {
-        if let Some(issue) = self.issues.get(self.sel) {
+        self.col_w = (self.right.w as usize).saturating_sub(GUTTER) / 2;
+        self.col_h = self.right.h as usize;
+        self.page = 0;
+        let sections = if let Some(issue) = self.issues.get(self.sel) {
             let text = std::fs::read_to_string(&issue.path)
                 .unwrap_or_else(|_| "(could not read this issue)".to_string());
-            let (styled, urls) = render_md(&text);
-            self.right.set_text(&styled);
-            self.links = urls;
+            issue_sections(&text, self.col_w, &mut self.links)
         } else {
-            self.right.set_text(&style::fg(
-                "  No news issues yet.\n\n  They appear here once the daily run\n  syncs an issue into ~/.news.",
-                C_URL,
-            ));
             self.links.clear();
+            vec![vec![
+                style::fg("No news issues yet.", C_URL),
+                String::new(),
+                style::fg("They appear here once the daily", C_URL),
+                style::fg("run syncs an issue into ~/.news.", C_URL),
+            ]]
+        };
+        self.columns = layout_columns(sections, self.col_h);
+    }
+
+    /// Index of the last two-column spread.
+    fn last_page(&self) -> usize {
+        self.columns.len().saturating_sub(1) / 2
+    }
+
+    /// Paint the right pane as the current two-column spread.
+    fn render_right(&mut self) {
+        let h = self.col_h.max(1);
+        let cw = self.col_w;
+        let left = self.columns.get(2 * self.page);
+        let right = self.columns.get(2 * self.page + 1);
+        let mut frame = String::new();
+        for i in 0..h {
+            let l = left.and_then(|c| c.get(i)).map(|s| s.as_str()).unwrap_or("");
+            let r = right.and_then(|c| c.get(i)).map(|s| s.as_str()).unwrap_or("");
+            let pad = cw.saturating_sub(crust::display_width(l)) + GUTTER;
+            frame.push_str(l);
+            if !r.is_empty() {
+                frame.push_str(&" ".repeat(pad));
+                frame.push_str(r);
+            }
+            if i + 1 < h {
+                frame.push('\n');
+            }
         }
+        self.right.set_text(&frame);
         self.right.ix = 0;
+        self.right.full_refresh();
     }
 
     fn render_top(&mut self) {
-        let pos = if self.issues.is_empty() {
+        let day = if self.issues.is_empty() {
             "0/0".to_string()
         } else {
             format!("{}/{}", self.sel + 1, self.issues.len())
         };
-        let date = self.issues.get(self.sel).map(|i| i.date.as_str()).unwrap_or("—");
-        let title = format!(" gazette   {}   ({})", date, pos);
-        let hint = "ENTER+N open · j/k scroll · n/p day · r reload · q quit ";
+        let date = self.issues.get(self.sel).map(|i| i.date.as_str()).unwrap_or("\u{2014}");
+        let pages = self.last_page() + 1;
+        let title = format!(" gazette   {}   (day {} \u{00b7} p{}/{})", date, day, self.page + 1, pages);
+        let hint = "ENTER+N open \u{00b7} PgUp/Dn page \u{00b7} g/G \u{00b7} n/p day \u{00b7} q quit ";
         let pad = (self.cols as usize)
             .saturating_sub(crust::display_width(&title) + crust::display_width(hint));
         self.top.say(&format!("{}{}{}",
-            style::bold(&style::fg(&title, C_TITLE)),
+            style::bold(&style::fg(&title, 81)),
             " ".repeat(pad),
             style::fg(hint, 245)));
     }
@@ -166,14 +327,14 @@ impl App {
     fn render_all(&mut self) {
         self.render_top();
         self.render_left();
-        self.right.full_refresh();
+        self.render_right();
         self.render_foot("");
     }
 
     fn render_foot(&mut self, msg: &str) {
         if msg.is_empty() {
             self.foot.say(&style::fg(
-                " Source links are numbered [N] — ENTER then the number opens it in scroll.", 245));
+                " Links are numbered [N] \u{2014} ENTER then the number opens it in scroll (or click in glass).", 245));
         } else {
             self.foot.say(&style::fg(msg, C_SECTION));
         }
@@ -187,7 +348,21 @@ impl App {
         self.load_selected();
         self.render_top();
         self.render_left();
-        self.right.full_refresh();
+        self.render_right();
+    }
+
+    /// Turn to a page (clamped), repainting if it changed.
+    fn goto_page(&mut self, p: usize) {
+        let clamped = p.min(self.last_page());
+        if clamped != self.page {
+            self.page = clamped;
+            self.page_changed();
+        }
+    }
+
+    fn page_changed(&mut self) {
+        self.render_top();
+        self.render_right();
     }
 
     /// ENTER: prompt for a link number (scroll's convention) and open it in
@@ -231,12 +406,12 @@ impl App {
             let Some(key) = Input::getchr(None) else { continue };
             match key.as_str() {
                 "q" | "ESC" => break,
-                "j" | "DOWN" => self.right.linedown(),
-                "k" | "UP" => self.right.lineup(),
-                " " => self.right.pagedown(),
-                "b" => self.right.pageup(),
-                "g" | "HOME" => self.right.top(),
-                "G" | "END" => self.right.bottom(),
+                // Section keep-together needs a fixed spread, so navigation is
+                // by page (two columns at a time), not by line.
+                "j" | "DOWN" | " " | "PgDOWN" => self.goto_page(self.page + 1),
+                "k" | "UP" | "b" | "PgUP" => self.goto_page(self.page.saturating_sub(1)),
+                "g" | "HOME" => self.goto_page(0),
+                "G" | "END" => self.goto_page(self.last_page()),
                 "n" | "]" | "RIGHT" => { let s = self.sel + 1; self.select(s); }
                 "p" | "[" | "LEFT" => { let s = self.sel.saturating_sub(1); self.select(s); }
                 "ENTER" => self.follow_link(),
@@ -256,10 +431,10 @@ impl App {
 fn main() {
     // --help / -h before entering the alt screen.
     if std::env::args().skip(1).any(|a| a == "-h" || a == "--help") {
-        println!("gazette — reader for your daily news digest (~/.news/news-*.md)");
-        println!("  j/k or arrows  scroll        n/p or [ ]  previous/next day");
-        println!("  SPACE/b        page          g/G         top/bottom");
-        println!("  ENTER then N   open link [N] in scroll    r reload    q quit");
+        println!("gazette \u{2014} reader for your daily news digest (~/.news/news-*.md)");
+        println!("  PgDn/PgUp (or j/k, arrows, SPACE/b)   turn a two-column page");
+        println!("  g/Home  G/End   first / last page     n/p or [ ]    prev/next day");
+        println!("  ENTER then N    open link [N] in scroll    r reload   q quit");
         return;
     }
     Crust::init();
