@@ -222,9 +222,13 @@ impl App {
         let mut top = Pane::new(1, 1, cols, 1, 81, 236);
         top.wrap = false;
         top.scroll = false;
-        let mut left = Pane::new(1, 2, LIST_W, rows.saturating_sub(2), C_BODY as u16, 0);
+        // Content panes start at row 3 (a blank "breathing" row below the top
+        // bar) and end one row above the foot, so the reading area has a little
+        // air top and bottom.
+        let body_h = rows.saturating_sub(4);
+        let mut left = Pane::new(1, 3, LIST_W, body_h, C_BODY as u16, 0);
         left.wrap = false;
-        let mut right = Pane::new(LIST_W + 2, 2, cols.saturating_sub(LIST_W + 1), rows.saturating_sub(2), C_BODY as u16, 0);
+        let mut right = Pane::new(LIST_W + 2, 3, cols.saturating_sub(LIST_W + 1), body_h, C_BODY as u16, 0);
         right.wrap = false;
         right.scroll = false;
         let mut foot = Pane::new(1, rows, cols, 1, 245, 236);
