@@ -9,7 +9,7 @@
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-CE412B?logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![Fe2O3 suite](https://img.shields.io/badge/Fe%E2%82%82O%E2%82%83-suite-0b5fa5)](https://github.com/isene/fe2o3)
 [![Built on crust](https://img.shields.io/badge/TUI-crust-555)](https://github.com/isene/crust)
-[![Release](https://img.shields.io/github/v/release/isene/gazette?color=0b5fa5)](https://github.com/isene/gazette/releases)
+[![Release](https://badgen.net/github/release/isene/gazette?color=0b5fa5)](https://github.com/isene/gazette/releases)
 [![License: Unlicense](https://img.shields.io/badge/license-Unlicense-3DA639)](https://unlicense.org)
 [![Stay Amazing](https://img.shields.io/badge/Stay-Amazing-ff6fa5)](https://isene.org)
 
