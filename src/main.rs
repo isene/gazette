@@ -41,7 +41,6 @@ struct Issue {
 
 struct App {
     cols: u16,
-    rows: u16,
     top: Pane,
     left: Pane,
     right: Pane,
@@ -90,7 +89,6 @@ fn wrap_plain(text: &str, width: usize) -> Vec<String> {
         if w > width {
             if !line.is_empty() {
                 out.push(std::mem::take(&mut line));
-                line_w = 0;
             }
             let mut chunk = String::new();
             let mut cw = 0;
@@ -237,7 +235,7 @@ impl App {
 
         let issues = load_issues();
         let mut app = App {
-            cols, rows, top, left, right, foot, issues, sel: 0,
+            cols, top, left, right, foot, issues, sel: 0,
             links: Vec::new(), columns: Vec::new(), page: 0, col_w: 0, col_h: 0,
         };
         app.load_selected();
