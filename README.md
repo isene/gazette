@@ -34,6 +34,7 @@ renders the selected issue in the right pane.
 | `g` / `G` | top / bottom |
 | `n` / `p` (also `]` `[`, `→` `←`) | next / previous day |
 | `ENTER` then a number | open that `[N]` source link in [scroll](https://github.com/isene/scroll) |
+| `Ctrl+A` | discuss the issue with Claude (full session: full text + source links) |
 | `r` | reload (re-scan `~/.news`) |
 | `q` / `ESC` | quit |
 
