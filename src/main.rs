@@ -303,7 +303,7 @@ impl App {
         let date = self.issues.get(self.sel).map(|i| i.date.as_str()).unwrap_or("\u{2014}");
         let pages = self.last_page() + 1;
         let title = format!(" gazette   {}   (day {} \u{00b7} p{}/{})", date, day, self.page + 1, pages);
-        let hint = "ENTER+N open \u{00b7} c discuss \u{00b7} PgUp/Dn \u{00b7} n/p day \u{00b7} q quit ";
+        let hint = "ENTER+N open \u{00b7} ^A discuss \u{00b7} PgUp/Dn \u{00b7} n/p day \u{00b7} q quit ";
         let pad = (self.cols as usize)
             .saturating_sub(crust::display_width(&title) + crust::display_width(hint));
         self.top.say(&format!("{}{}{}",
@@ -458,7 +458,7 @@ impl App {
                 "n" | "]" | "RIGHT" => { let s = self.sel + 1; self.select(s); }
                 "p" | "[" | "LEFT" => { let s = self.sel.saturating_sub(1); self.select(s); }
                 "ENTER" => self.follow_link(),
-                "c" => self.discuss_news(),
+                "C-A" => self.discuss_news(), // Fe2O3-standard: full CC session
                 "r" => {
                     self.issues = load_issues();
                     if self.sel >= self.issues.len() { self.sel = self.issues.len().saturating_sub(1); }
@@ -479,7 +479,7 @@ fn main() {
         println!("  PgDn/PgUp (or j/k, arrows, SPACE/b)   turn a two-column page");
         println!("  g/Home  G/End   first / last page     n/p or [ ]    prev/next day");
         println!("  ENTER then N    open link [N] in scroll");
-        println!("  c    discuss the issue with Claude (full text + links)    r reload   q quit");
+        println!("  Ctrl-A  discuss the issue with Claude (full text + links)    r reload   q quit");
         return;
     }
     Crust::init();

@@ -1,6 +1,6 @@
 [package]
 name = "gazette"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 authors = ["Geir Isene <g@isene.com>"]
 description = "Terminal reader for your personal daily news digest. Part of the Fe2O3 Rust terminal suite."
