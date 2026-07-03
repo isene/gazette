@@ -20,6 +20,7 @@
 // fast startup, minimal work per keystroke.
 
 use crust::{Crust, Pane, Input, style};
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 const LIST_W: u16 = 14; // left day-list width ("2026-06-07" + marker)
@@ -33,6 +34,7 @@ const C_URL: u8 = 245; // url host (dim)
 const C_LINKNUM: u8 = 75; // [N] markers (matches scroll's link colour)
 const C_SEP: u8 = 238; // section rule
 const C_SEL: u8 = 81; // selected day
+const C_READ: u8 = 108; // read-day check mark (muted green)
 
 struct Issue {
     date: String,
@@ -52,10 +54,40 @@ struct App {
     page: usize,        // current two-column spread (shows columns 2p, 2p+1)
     col_w: usize,       // one column's text width
     col_h: usize,       // one column's height in rows
+    read: HashSet<String>, // dates already read (synced across devices)
 }
 
 fn news_dir() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".news")
+}
+
+/// The read-state file, shared with the nomad gazette app through the same
+/// Syncthing-synced ~/.news folder. One `YYYY-MM-DD` per line.
+fn read_state_path() -> PathBuf {
+    news_dir().join(".gazette-read")
+}
+
+/// Load the set of dates already read. Missing file = nothing read yet.
+fn load_read() -> HashSet<String> {
+    std::fs::read_to_string(read_state_path())
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect()
+}
+
+/// Union-write the read set to disk, folding in any dates a *different* device
+/// added (and Syncthing carried in) since we loaded. Only called on an actual
+/// state change, so the disk is untouched while browsing.
+fn save_read(set: &HashSet<String>) {
+    let mut all: HashSet<String> = load_read();
+    all.extend(set.iter().cloned());
+    let mut dates: Vec<&String> = all.iter().collect();
+    dates.sort();
+    let mut body = String::new();
+    for d in dates { body.push_str(d); body.push('\n'); }
+    let _ = std::fs::write(read_state_path(), body);
 }
 
 /// Scan ~/.news for `news-YYYY-MM-DD.md`, newest first.
@@ -237,9 +269,33 @@ impl App {
         let mut app = App {
             cols, top, left, right, foot, issues, sel: 0,
             links: Vec::new(), columns: Vec::new(), page: 0, col_w: 0, col_h: 0,
+            read: load_read(),
         };
         app.load_selected();
         app
+    }
+
+    /// Mark the day now in view as read, persisting only if it wasn't already.
+    /// Returns true when the set changed (so the caller repaints the list).
+    fn mark_current_read(&mut self) -> bool {
+        let Some(date) = self.issues.get(self.sel).map(|i| i.date.clone()) else {
+            return false;
+        };
+        if self.read.insert(date) {
+            save_read(&self.read);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Reading signal: you've turned to the issue's last page (or pressed a
+    /// "go to end" key on a single-page issue). Deliberate, event-driven, no
+    /// timer — merely opening gazette or `n`/`p` hopping never marks a day.
+    fn check_read(&mut self) {
+        if !self.issues.is_empty() && self.page == self.last_page() && self.mark_current_read() {
+            self.render_left();
+        }
     }
 
     /// Read the selected issue, wrap + paginate into section-kept columns,
@@ -315,10 +371,19 @@ impl App {
     fn render_left(&mut self) {
         let mut lines = String::new();
         for (i, issue) in self.issues.iter().enumerate() {
+            // A trailing check on days you've finished reading (synced with the
+            // phone). The list width (LIST_W) budgets the extra glyph.
+            let mark = if self.read.contains(&issue.date) {
+                style::fg(" \u{2713}", C_READ)
+            } else {
+                String::new()
+            };
             if i == self.sel {
                 lines.push_str(&style::reverse(&style::fg(&format!(" {} ", issue.date), C_SEL)));
+                lines.push_str(&mark);
             } else {
                 lines.push_str(&style::fg(&format!(" {}", issue.date), C_BODY));
+                lines.push_str(&mark);
             }
             lines.push('\n');
         }
@@ -451,16 +516,17 @@ impl App {
                 "q" | "ESC" => break,
                 // Section keep-together needs a fixed spread, so navigation is
                 // by page (two columns at a time), not by line.
-                "j" | "DOWN" | " " | "PgDOWN" => self.goto_page(self.page + 1),
+                "j" | "DOWN" | " " | "PgDOWN" => { self.goto_page(self.page + 1); self.check_read(); }
                 "k" | "UP" | "b" | "PgUP" => self.goto_page(self.page.saturating_sub(1)),
                 "g" | "HOME" => self.goto_page(0),
-                "G" | "END" => self.goto_page(self.last_page()),
+                "G" | "END" => { self.goto_page(self.last_page()); self.check_read(); }
                 "n" | "]" | "RIGHT" => { let s = self.sel + 1; self.select(s); }
                 "p" | "[" | "LEFT" => { let s = self.sel.saturating_sub(1); self.select(s); }
                 "ENTER" => self.follow_link(),
                 "C-A" => self.discuss_news(), // Fe2O3-standard: full CC session
                 "r" => {
                     self.issues = load_issues();
+                    self.read = load_read(); // fold in reads synced from the phone
                     if self.sel >= self.issues.len() { self.sel = self.issues.len().saturating_sub(1); }
                     self.load_selected();
                     self.render_all();
