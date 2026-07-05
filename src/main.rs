@@ -63,8 +63,12 @@ fn news_dir() -> PathBuf {
 
 /// The read-state file, shared with the nomad gazette app through the same
 /// Syncthing-synced ~/.news folder. One `YYYY-MM-DD` per line.
+/// Local (per-device, unsynced) read-state. Deliberately NOT under ~/.news:
+/// that folder is receive-only on the phone, so anything written there gets
+/// reverted by Syncthing. Read-state stays on the device that wrote it.
 fn read_state_path() -> PathBuf {
-    news_dir().join(".gazette-read")
+    PathBuf::from(std::env::var("HOME").unwrap_or_default())
+        .join(".config/gazette/read")
 }
 
 /// Load the set of dates already read. Missing file = nothing read yet.
@@ -87,7 +91,9 @@ fn save_read(set: &HashSet<String>) {
     dates.sort();
     let mut body = String::new();
     for d in dates { body.push_str(d); body.push('\n'); }
-    let _ = std::fs::write(read_state_path(), body);
+    let path = read_state_path();
+    if let Some(parent) = path.parent() { let _ = std::fs::create_dir_all(parent); }
+    let _ = std::fs::write(path, body);
 }
 
 /// Scan ~/.news for `news-YYYY-MM-DD.md`, newest first.

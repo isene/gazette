@@ -60,7 +60,7 @@ dependencies = [
 
 [[package]]
 name = "gazette"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "fe2o3-crust",
 ]
