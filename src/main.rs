@@ -205,7 +205,7 @@ fn issue_sections(md: &str, col_w: usize, links: &mut Vec<String>) -> Vec<Vec<St
             let n = links.len();
             let host = hostname(line);
             // OSC 8 around the label so a glass click opens the full URL too.
-            let labelled = format!("\x1b]8;;{}\x1b\\{}\x1b]8;;\x1b\\", line, style::fg(&host, C_URL));
+            let labelled = style::hyperlink(line, &style::fg(&host, C_URL));
             cur.push(format!("{} {}", style::fg(&format!("[{}]", n), C_LINKNUM), labelled));
         } else if line.is_empty() {
             // ignored — item spacing is added at the `###` boundary
