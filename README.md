@@ -36,7 +36,7 @@ renders the selected issue in the right pane.
 | `ENTER` then a number | open that `[N]` source link in [scroll](https://github.com/isene/scroll) |
 | `Ctrl+A` | discuss the issue with Claude (full session: full text + source links) |
 | `r` | reload (re-scan `~/.news`) |
-| `q` / `ESC` | quit |
+| `q` | quit |
 
 Source URLs are numbered `[N]` inline and also emitted as OSC 8 hyperlinks, so
 they are clickable directly in terminals that support it (e.g. glass).

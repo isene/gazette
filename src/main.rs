@@ -519,7 +519,7 @@ impl App {
         loop {
             let Some(key) = Input::getchr(None) else { continue };
             match key.as_str() {
-                "q" | "ESC" => break,
+                "q" => break,
                 // Section keep-together needs a fixed spread, so navigation is
                 // by page (two columns at a time), not by line.
                 "j" | "DOWN" | " " | "PgDOWN" => { self.goto_page(self.page + 1); self.check_read(); }
