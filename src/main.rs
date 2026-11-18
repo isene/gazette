@@ -406,8 +406,8 @@ impl App {
 
     fn render_foot(&mut self, msg: &str) {
         if msg.is_empty() {
-            self.foot.say(&style::fg(
-                " Links are numbered [N] \u{2014} ENTER then the number opens it in scroll (or click in glass).", 245));
+            let keys = style::fg(" Links are numbered [N] \u{2014} ENTER then the number opens it in scroll (or click in glass).", 245);
+            self.foot.say(&crust::with_version(&keys, self.foot.w as usize, "gazette", env!("CARGO_PKG_VERSION")));
         } else {
             self.foot.say(&style::fg(msg, C_SECTION));
         }
